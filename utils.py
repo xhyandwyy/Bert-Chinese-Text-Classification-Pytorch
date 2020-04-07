@@ -16,22 +16,42 @@ def build_dataset(config):
                 lin = line.strip()
                 if not lin:
                     continue
-                content, label = lin.split('\t')
-                token = config.tokenizer.tokenize(content)
-                token = [CLS] + token
-                seq_len = len(token)
+                label, content = lin.split('\t')
+                content = content.strip().split(" ")
+                tokens = []
+                segment_ids = []
+                tokens.append("[CLS]")
+                segment_ids.append(0)
+                for idx, token in enumerate(content):
+                    if '_c' in content[idx]:
+                        is_driver = False
+                    else:
+                        is_driver = True
+                    token = token.replace("_cf", "").replace("_sf", ""). \
+                        replace("_c", "").replace("_s", "")
+                    if token not in config.tokenizer.vocab:
+                        continue
+                    if is_driver:
+                        tokens.append(token)
+                        segment_ids.append(0)
+                    else:
+                        tokens.append(token)
+                        segment_ids.append(1)
+                seq_len = len(tokens)
                 mask = []
-                token_ids = config.tokenizer.convert_tokens_to_ids(token)
-
+                token_ids = config.tokenizer.convert_tokens_to_ids(tokens)
+                assert len(tokens) == len(segment_ids)
                 if pad_size:
-                    if len(token) < pad_size:
-                        mask = [1] * len(token_ids) + [0] * (pad_size - len(token))
-                        token_ids += ([0] * (pad_size - len(token)))
+                    if len(tokens) < pad_size:
+                        mask = [1] * len(token_ids) + [0] * (pad_size - len(tokens))
+                        token_ids += ([0] * (pad_size - len(tokens)))
+                        segment_ids += ([0] * (pad_size - len(segment_ids)))
                     else:
                         mask = [1] * pad_size
                         token_ids = token_ids[:pad_size]
+                        segment_ids = segment_ids[:pad_size]
                         seq_len = pad_size
-                contents.append((token_ids, int(label), seq_len, mask))
+                contents.append((token_ids, segment_ids, int(label), seq_len, mask))
         return contents
     train = load_dataset(config.train_path, config.pad_size)
     dev = load_dataset(config.dev_path, config.pad_size)
@@ -52,12 +72,13 @@ class DatasetIterater(object):
 
     def _to_tensor(self, datas):
         x = torch.LongTensor([_[0] for _ in datas]).to(self.device)
-        y = torch.LongTensor([_[1] for _ in datas]).to(self.device)
+        y = torch.LongTensor([_[2] for _ in datas]).to(self.device)
+        seg = torch.LongTensor([_[1] for _ in datas]).to(self.device)
 
         # pad前的长度(超过pad_size的设为pad_size)
-        seq_len = torch.LongTensor([_[2] for _ in datas]).to(self.device)
-        mask = torch.LongTensor([_[3] for _ in datas]).to(self.device)
-        return (x, seq_len, mask), y
+        seq_len = torch.LongTensor([_[3] for _ in datas]).to(self.device)
+        mask = torch.LongTensor([_[4] for _ in datas]).to(self.device)
+        return (x, seg, seq_len, mask), y
 
     def __next__(self):
         if self.residue and self.index == self.n_batches:
