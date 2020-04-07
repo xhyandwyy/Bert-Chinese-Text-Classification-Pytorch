@@ -29,15 +29,47 @@ def init_network(model, method='xavier', exclude='embedding', seed=123):
 
 
 def train(config, model, train_iter, dev_iter, test_iter):
+    discr = True
     start_time = time.time()
     model.train()
     param_optimizer = list(model.named_parameters())
     no_decay = ['bias', 'LayerNorm.bias', 'LayerNorm.weight']
-    optimizer_grouped_parameters = [
-        {'params': [p for n, p in param_optimizer if not any(nd in n for nd in no_decay)], 'weight_decay': 0.01},
-        {'params': [p for n, p in param_optimizer if any(nd in n for nd in no_decay)], 'weight_decay': 0.0}]
+    if discr:
+            lr = config.learning_rate
+            groups = [(f'layer.{i}.', lr * pow(config.layer_learning_rate_decay, 11 - i)) for i in range(12)]
+            group_all = [f'layer.{i}.' for i in range(12)]
+            no_decay_optimizer_parameters = []
+            decay_optimizer_parameters = []
+            for g, l in groups:
+                no_decay_optimizer_parameters.append(
+                    {
+                        'params': [p for n, p in model.named_parameters() if
+                                   not any(nd in n for nd in no_decay) and any(nd in n for nd in [g])],
+                        'weight_decay_rate': 0.01, 'lr': l
+                    }
+                )
+                decay_optimizer_parameters.append(
+                    {
+                        'params': [p for n, p in model.named_parameters() if
+                                   any(nd in n for nd in no_decay) and any(nd in n for nd in [g])],
+                        'weight_decay_rate': 0.0, 'lr': l
+                    }
+                )
+            group_all_parameters = [
+                {'params': [p for n, p in model.named_parameters() if
+                            not any(nd in n for nd in no_decay) and not any(nd in n for nd in group_all)],
+                 'weight_decay_rate': 0.01},
+                {'params': [p for n, p in model.named_parameters() if
+                            any(nd in n for nd in no_decay) and not any(nd in n for nd in group_all)],
+                 'weight_decay_rate': 0.0},
+            ]
+            optimizer_parameters = no_decay_optimizer_parameters + decay_optimizer_parameters + group_all_parameters
+    else:
+        optimizer_parameters = [
+            {'params': [p for n, p in param_optimizer if not any(nd in n for nd in no_decay)], 'weight_decay': 0.01},
+            {'params': [p for n, p in param_optimizer if any(nd in n for nd in no_decay)], 'weight_decay': 0.0}]
     # optimizer = torch.optim.Adam(model.parameters(), lr=config.learning_rate)
-    optimizer = BertAdam(optimizer_grouped_parameters,
+    optimizer = BertAdam(optimizer_parameters,
                          lr=config.learning_rate,
                          warmup=0.05,
                          t_total=len(train_iter) * config.num_epochs)
